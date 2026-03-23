@@ -1,0 +1,46 @@
+---
+title: "Motivational Questions"
+author: "Sam Utzinger"
+date: "2026-02-12"
+output: pdf_document
+---
+
+### The purpose of this document is to provide a reference for the Data Science Club members for the LMC Operation Data Storm motivational questions.
+
+## SIS - Student Information System Data
+
+What populations are less successful?
+
+Where are students starting?
+
+Based on degree, what is the terminal math course? What percentage pass?
+
+What demographics lead to student success?
+
+Where do students start on campus?
+
+How many credits are taken at NAU?
+
+## Pearson - Assignment Data
+
+Do Unit 1 exams affect final grades?
+
+Can we find trends about the quality of assignments?
+
+Can we detect the use of AI?
+
+Does the grade distribution affect overall grades?
+
+## Canvas - Student Assignment and Attendance Data
+
+What topics are confusing?
+
+Can you identify critical points in assignments?
+
+How does engagement affect contributions?
+
+Can we track student progression over time?
+
+Is participation and attendance consistent across semesters?
+
+Which assignments correspond to which topics?

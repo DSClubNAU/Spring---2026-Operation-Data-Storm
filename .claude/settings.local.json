@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /d/Users/samut/OneDrive/Documents/GitHub/DataSciClub/*.md)",
+      "Bash(wc -l \"d:/Users/samut/OneDrive/Documents/GitHub/DataSciClub/Cleaned_For_DataSci\"/*.csv)",
+      "Bash(python:*)"
+    ]
+  }
+}

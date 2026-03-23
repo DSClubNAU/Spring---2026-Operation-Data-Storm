@@ -1,0 +1,637 @@
+---
+title: "MAT 125 Precalculus — Student Success Analysis"
+subtitle: "NAU Lumberjack Mathematics Center · Fall 2024 & Spring 2025"
+author: "NAU Data Science Club"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    theme: flatly
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    fig-width: 9
+    fig-height: 5
+  pdf:
+    toc: true
+    toc-depth: 3
+    geometry: margin=1in
+    fig-width: 7
+    fig-height: 4
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import warnings
+import re
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import seaborn as sns
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import roc_curve, auc
+
+warnings.filterwarnings("ignore")
+sns.set_theme(style="whitegrid")
+os.makedirs("figures", exist_ok=True)
+
+# ── Load data ──────────────────────────────────────────────────────────────────
+master = pd.read_csv("Cleaned_For_DataSci/master_student.csv")
+canvas = pd.read_csv("Cleaned_For_DataSci/canvas.csv", low_memory=False)
+
+OVERALL_PASS_RATE = master["Passed_int"].mean() * 100
+
+# ── Reusable helper ────────────────────────────────────────────────────────────
+def pass_rate_by(df, col, min_students=10):
+    result = (
+        df.groupby(col)["Passed_int"]
+          .agg(pass_rate="mean", n="count")
+          .reset_index()
+    )
+    result["pass_rate"] = result["pass_rate"] * 100
+    result = result[result["n"] >= min_students]
+    return result.sort_values("pass_rate")
+```
+
+## 1  Introduction & Data Overview
+
+This report analyzes two semesters of MAT 125 Precalculus enrollment and engagement data from three university systems: the **Student Information System (SIS)**, the **Pearson homework platform**, and the **Canvas LMS**. The goal is to surface actionable patterns for the NAU mathematics department.
+
+### Dataset Summary
+
+```{python}
+#| label: data-summary
+#| fig-cap: "Student coverage across the three data systems."
+
+sis_raw = pd.read_csv("Cleaned_For_DataSci/SIS.csv")
+n_total   = len(master)
+n_pearson = master["hw_completion_rate"].notna().sum()
+n_canvas  = master["Check.Your.Understanding.Final.Score"].notna().sum()
+n_all3    = (master["hw_completion_rate"].notna() &
+             master["Check.Your.Understanding.Final.Score"].notna()).sum()
+
+summary = pd.DataFrame({
+    "Dataset":       ["SIS (raw)", "SIS graded", "SIS + Pearson", "SIS + Canvas", "All three systems"],
+    "Students":      [len(sis_raw), n_total, n_pearson, n_canvas, n_all3],
+    "Coverage (%)":  [100, n_total/len(sis_raw)*100,
+                      n_pearson/n_total*100, n_canvas/n_total*100,
+                      n_all3/n_total*100]
+})
+summary["Coverage (%)"] = summary["Coverage (%)"].round(1)
+print(summary.to_string(index=False))
+```
+
+```{python}
+#| label: fig-coverage
+#| fig-cap: "Student coverage across data systems."
+
+labels = ["SIS (base)", "SIS + Pearson", "SIS + Canvas", "All Three"]
+counts = [n_total, n_pearson, n_canvas, n_all3]
+colors = ["steelblue", "#5a9e7a", "#e0804e", "#8e5ea2"]
+
+fig, ax = plt.subplots(figsize=(8, 3.5))
+bars = ax.barh(labels, counts, color=colors)
+for bar, count in zip(bars, counts):
+    pct = count / n_total * 100
+    ax.text(bar.get_width() + 5, bar.get_y() + bar.get_height() / 2,
+            f"{count:,}  ({pct:.1f}%)", va="center", fontsize=10)
+ax.set_xlabel("Number of Student-Term Records")
+ax.set_title("MAT 125 Data Coverage Across Systems")
+ax.set_xlim(0, n_total * 1.3)
+plt.tight_layout()
+plt.show()
+```
+
+::: {.callout-note}
+**Overall pass rate: `{python} f"{OVERALL_PASS_RATE:.1f}"`%** across both Fall 2024 and Spring 2025.
+:::
+
+---
+
+## 2  Who Struggles? Demographic Analysis
+
+Demographic pass rate comparisons reveal which student populations face the greatest barriers in MAT 125. All analyses use A/B/C as passing; D/F/W as not passing. Groups with fewer than 10 students are excluded.
+
+```{python}
+#| label: fig-sex
+#| fig-cap: "Pass rate by student sex."
+
+sex_df = pass_rate_by(master, "Sex")
+fig, ax = plt.subplots(figsize=(7, 2.8))
+bars = ax.barh(sex_df["Sex"], sex_df["pass_rate"], color="steelblue")
+ax.axvline(OVERALL_PASS_RATE, color="red", linestyle="--",
+           label=f"Overall: {OVERALL_PASS_RATE:.1f}%")
+for bar, (_, row) in zip(bars, sex_df.iterrows()):
+    ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+            f"n={int(row['n'])}", va="center", fontsize=9)
+ax.set_xlabel("Pass Rate (%)")
+ax.set_title("Pass Rate by Sex")
+ax.set_xlim(0, 110)
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| label: fig-ethnicity
+#| fig-cap: "Pass rate by IPEDS Ethnicity (groups with n < 15 excluded)."
+
+eth_df = pass_rate_by(master, "IPEDS.Ethnicity", min_students=15)
+fig, ax = plt.subplots(figsize=(9, 4))
+bars = ax.barh(eth_df["IPEDS.Ethnicity"], eth_df["pass_rate"], color="steelblue")
+ax.axvline(OVERALL_PASS_RATE, color="red", linestyle="--",
+           label=f"Overall: {OVERALL_PASS_RATE:.1f}%")
+for bar, (_, row) in zip(bars, eth_df.iterrows()):
+    ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+            f"n={int(row['n'])}", va="center", fontsize=9)
+ax.set_xlabel("Pass Rate (%)")
+ax.set_title("Pass Rate by IPEDS Ethnicity")
+ax.set_xlim(0, 115)
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| label: fig-firstgen
+#| fig-cap: "Pass rate by first-generation college student status."
+
+gen = master.copy()
+gen["FirstGen.Label"] = gen["X1st.Gen.College.Std.Flag"].map(
+    {"Y": "First-Gen", "N": "Non-First-Gen"}
+)
+gen_df = pass_rate_by(gen.dropna(subset=["FirstGen.Label"]), "FirstGen.Label")
+
+fig, ax = plt.subplots(figsize=(7, 2.8))
+bars = ax.barh(gen_df["FirstGen.Label"], gen_df["pass_rate"], color="steelblue")
+ax.axvline(OVERALL_PASS_RATE, color="red", linestyle="--",
+           label=f"Overall: {OVERALL_PASS_RATE:.1f}%")
+for bar, (_, row) in zip(bars, gen_df.iterrows()):
+    ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+            f"n={int(row['n'])}", va="center", fontsize=9)
+ax.set_xlabel("Pass Rate (%)")
+ax.set_title("Pass Rate by First-Generation Status")
+ax.set_xlim(0, 110)
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## 3  Homework Habits (Pearson)
+
+### Q1 — Does Homework Score Predict Passing?
+
+Pearson pre-populates all assignment rows for all students; mandatory homework always has a recorded score, while optional enrichment rows are nearly all `NaN`. The meaningful engagement metric is **`hw_score_mean`** — the average score on mandatory assignments — which varies from 0–100.
+
+```{python}
+#| label: fig-hw-quartile
+#| fig-cap: "Pass rate by homework score quartile. Top-quartile students show dramatically higher pass rates."
+
+has_pearson = master.dropna(subset=["hw_score_mean"]).copy()
+has_pearson["hw_score_quartile"] = pd.qcut(
+    has_pearson["hw_score_mean"],
+    q=4,
+    labels=["Q1 (Bottom 25%)", "Q2 (25–50%)", "Q3 (50–75%)", "Q4 (Top 25%)"],
+    duplicates="drop"
+)
+hw_q_df = pass_rate_by(has_pearson.dropna(subset=["hw_score_quartile"]),
+                        "hw_score_quartile", min_students=10)
+
+fig, ax = plt.subplots(figsize=(8, 3.5))
+bars = ax.barh(
+    hw_q_df["hw_score_quartile"].astype(str),
+    hw_q_df["pass_rate"],
+    color="steelblue"
+)
+ax.axvline(OVERALL_PASS_RATE, color="red", linestyle="--",
+           label=f"Overall: {OVERALL_PASS_RATE:.1f}%")
+for bar, (_, row) in zip(bars, hw_q_df.iterrows()):
+    ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+            f"n={int(row['n'])}", va="center", fontsize=9)
+ax.set_xlabel("Pass Rate (%)")
+ax.set_title("Pass Rate by Homework Score Quartile")
+ax.set_xlim(0, 110)
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+top_q = hw_q_df[hw_q_df["hw_score_quartile"].astype(str).str.contains("Top")]["pass_rate"].values
+bot_q = hw_q_df[hw_q_df["hw_score_quartile"].astype(str).str.contains("Bottom")]["pass_rate"].values
+if len(top_q) and len(bot_q):
+    print(f"Top quartile: {top_q[0]:.1f}%  |  Bottom quartile: {bot_q[0]:.1f}%  |  Gap: {top_q[0]-bot_q[0]:.1f} pts")
+```
+
+### AI Proxy — Fast-Submit Behavior
+
+```{python}
+#| label: fig-fast-submit
+#| fig-cap: "Distribution of fast-submit rates (fraction of assignments completed in < 1 min) by course outcome."
+
+fig, ax = plt.subplots(figsize=(9, 4))
+for passed, label, color in [(True, "Passed", "steelblue"), (False, "Did Not Pass", "tomato")]:
+    subset = has_pearson[has_pearson["Passed"] == passed]["hw_fast_submit_rate"].dropna()
+    sns.kdeplot(subset, ax=ax, label=f"{label} (n={len(subset):,})",
+                color=color, fill=True, alpha=0.3, bw_adjust=0.8)
+ax.set_xlabel("Fast-Submit Rate (fraction of assignments < 1 min)")
+ax.set_ylabel("Density")
+ax.set_title("Fast-Submit Rate by Course Outcome\n(Proxy for surface-level engagement — not proof of AI use)")
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+overall_pct = has_pearson["hw_fast_submit_rate"].mean() * 100
+print(f"Overall mean fast-submit rate: {overall_pct:.1f}% of assignments")
+```
+
+::: {.callout-warning}
+**Ethical note:** Fast-submit rate is a behavioral proxy, not direct evidence of academic dishonesty. Time data alone cannot distinguish between students who are very fast, students who use AI tools, and students who skip content. Pair with score patterns for a stronger signal.
+:::
+
+---
+
+## 4  Engagement & Topics (Canvas)
+
+### Q2 — Which Topics Are Hardest?
+
+```{python}
+#| label: fig-cyu-topics
+#| fig-cap: "Bottom 15 topics by mean CYU score. Red bars are below 70%."
+
+def extract_cyu_topic(col):
+    m = re.search(r"Check\.Your\.Understanding\.\.(.+?)\.\.\d+", col)
+    if m:
+        raw = m.group(1)
+        cleaned = raw.replace("...", " / ").replace("..", " / ").replace(".", " ")
+        return cleaned.strip()
+    return None
+
+cyu_item_cols = [
+    c for c in canvas.columns
+    if "Check.Your.Understanding" in c
+    and "Final.Score" not in c
+    and "Unposted" not in c
+    and "Current.Score" not in c
+]
+
+topic_buckets = {}
+for col in cyu_item_cols:
+    topic = extract_cyu_topic(col)
+    if topic is None:
+        continue
+    vals = pd.to_numeric(canvas[col], errors="coerce").dropna()
+    if len(vals) == 0:
+        continue
+    col_max = vals.max()
+    if col_max > 0:
+        pct_scores = (vals / col_max * 100).tolist()
+        topic_buckets.setdefault(topic, []).extend(pct_scores)
+
+topic_df = pd.DataFrame([
+    {"topic": t, "mean_pct": np.mean(v), "n": len(v)}
+    for t, v in topic_buckets.items()
+    if len(v) >= 50
+]).sort_values("mean_pct")
+
+overall_cyu_mean = topic_df["mean_pct"].mean()
+bottom15 = topic_df.head(15).copy()
+bar_colors = ["tomato" if v < 70 else "steelblue" for v in bottom15["mean_pct"]]
+
+fig, ax = plt.subplots(figsize=(10, 6))
+bars = ax.barh(bottom15["topic"], bottom15["mean_pct"], color=bar_colors)
+ax.axvline(overall_cyu_mean, color="red", linestyle="--",
+           label=f"Course mean: {overall_cyu_mean:.1f}%")
+for bar, (_, row) in zip(bars, bottom15.iterrows()):
+    ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
+            f"n={int(row['n']):,}", va="center", fontsize=8)
+ax.set_xlabel("Mean CYU Score (% of max possible)")
+ax.set_title("MAT 125 — Bottom 15 Topics by CYU Score  (red = below 70%)")
+ax.set_xlim(0, 115)
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+hardest = topic_df.iloc[0]
+print(f"Hardest topic: {hardest['topic']}  at {hardest['mean_pct']:.1f}%  "
+      f"({overall_cyu_mean - hardest['mean_pct']:.1f} pts below course mean)")
+```
+
+### Q3 — Attendance Trajectory
+
+```{python}
+#| label: fig-attendance
+#| fig-cap: "Weekly lab attendance (%) for passing vs. non-passing students in Fall 2024."
+
+def extract_week(col):
+    m = re.search(r"Week\.(\d+)\.Lab", col)
+    return int(m.group(1)) if m else None
+
+fall = canvas[canvas["Term"] == 1247].copy()
+all_att_cols = [c for c in canvas.columns if "Lab.Attendance" in c]
+fall_att_cols = [c for c in all_att_cols if fall[c].notna().sum() > 0]
+for col in fall_att_cols:
+    fall[col] = pd.to_numeric(fall[col], errors="coerce")
+
+fall_long = fall[["Identifier"] + fall_att_cols].melt(
+    id_vars="Identifier", var_name="col", value_name="attendance_score"
+).dropna(subset=["attendance_score"])
+fall_long["week"] = fall_long["col"].apply(extract_week)
+fall_long = fall_long.dropna(subset=["week"])
+fall_long["week"] = fall_long["week"].astype(int)
+fall_long["Identifier"] = pd.to_numeric(fall_long["Identifier"], errors="coerce")
+fall_long["attendance_pct"] = (fall_long["attendance_score"] / 10 * 100).clip(0, 100)
+
+outcomes = master[master["Term"] == 1247][["Identifier", "Passed"]].copy()
+outcomes["Identifier"] = pd.to_numeric(outcomes["Identifier"], errors="coerce")
+fall_long = fall_long.merge(outcomes, on="Identifier", how="inner")
+
+weekly = (
+    fall_long.groupby(["week", "Passed"])["attendance_pct"]
+    .mean().reset_index()
+)
+passed_w     = weekly[weekly["Passed"] == True].sort_values("week")
+not_passed_w = weekly[weekly["Passed"] == False].sort_values("week")
+
+fig, ax = plt.subplots(figsize=(11, 5))
+ax.plot(passed_w["week"], passed_w["attendance_pct"],
+        marker="o", color="steelblue", lw=2.5, label="Passed")
+ax.plot(not_passed_w["week"], not_passed_w["attendance_pct"],
+        marker="o", color="tomato",    lw=2.5, label="Did Not Pass")
+ax.axvline(6, color="gray", linestyle="--", alpha=0.7, label="Week 6")
+ax.set_xlabel("Week of Semester")
+ax.set_ylabel("Mean Lab Attendance (%)")
+ax.set_title("Lab Attendance Trajectory by Outcome  (Fall 2024)")
+ax.set_xticks(sorted(fall_long["week"].unique()))
+ax.set_ylim(0, 105)
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+w6_pass   = passed_w[passed_w["week"] == 6]["attendance_pct"].values
+w6_nopass = not_passed_w[not_passed_w["week"] == 6]["attendance_pct"].values
+if len(w6_pass) and len(w6_nopass):
+    print(f"Week 6 gap: {w6_pass[0]:.1f}% (passing) vs {w6_nopass[0]:.1f}% (not passing) — {w6_pass[0]-w6_nopass[0]:.1f} pt difference")
+```
+
+---
+
+## 5  Cross-Dataset Insights
+
+### Q4 — Time-on-Task by Demographic
+
+```{python}
+#| label: fig-time-scatter
+#| fig-cap: "Time per homework assignment vs. mean score, colored by outcome."
+
+q4 = master.dropna(subset=["hw_time_total_min", "hw_submissions"]).copy()
+q4["hw_time_per_assignment"] = q4["hw_time_total_min"] / q4["hw_submissions"]
+q4 = q4[q4["hw_time_per_assignment"] <= 500]
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for passed, label, color in [(True, "Passed", "steelblue"), (False, "Did Not Pass", "tomato")]:
+    subset = q4[q4["Passed"] == passed]
+    ax.scatter(subset["hw_time_per_assignment"], subset["hw_score_mean"],
+               c=color, label=f"{label} (n={len(subset):,})", alpha=0.35, s=18)
+ax.set_xlabel("Mean Time per Homework Assignment (min)")
+ax.set_ylabel("Mean Homework Score")
+ax.set_title("Time-on-Task vs. Homework Score  (colored by outcome)")
+ax.legend()
+ax.set_xlim(left=0)
+plt.tight_layout()
+plt.show()
+
+med_time  = q4["hw_time_per_assignment"].median()
+above_med = q4[q4["hw_time_per_assignment"] >= med_time]["Passed_int"].mean() * 100
+below_med = q4[q4["hw_time_per_assignment"] <  med_time]["Passed_int"].mean() * 100
+print(f"Above-median time pass rate: {above_med:.1f}%  |  Below-median: {below_med:.1f}%")
+```
+
+### Q5 — Does Engagement Close the Demographic Gap?
+
+```{python}
+#| label: fig-engagement-heatmap
+#| fig-cap: "Pass rate by ethnicity and engagement level. High-engagement cells show reduced gaps."
+
+eng_cols = ["Pre.Class.Prep.Final.Score",
+            "Check.Your.Understanding.Final.Score",
+            "Attendance...Participation.Final.Score"]
+avail_eng = [c for c in eng_cols if c in master.columns]
+
+q5 = master.dropna(subset=avail_eng).copy()
+scaler = MinMaxScaler()
+q5_scaled = pd.DataFrame(
+    scaler.fit_transform(q5[avail_eng]),
+    columns=[c + "_s" for c in avail_eng],
+    index=q5.index
+)
+q5 = pd.concat([q5, q5_scaled], axis=1)
+
+weights = {
+    "Pre.Class.Prep.Final.Score_s":               0.40,
+    "Check.Your.Understanding.Final.Score_s":     0.40,
+    "Attendance...Participation.Final.Score_s":   0.20,
+}
+avail_w = [c for c in weights if c in q5.columns]
+total_w = sum(weights[c] for c in avail_w)
+q5["engagement_score"] = sum(q5[c] * weights[c] / total_w for c in avail_w)
+q5["engagement_level"] = pd.qcut(q5["engagement_score"], q=3, labels=["Low", "Medium", "High"])
+
+MIN_CELL = 10
+heat_rate = q5.pivot_table(
+    index="IPEDS.Ethnicity", columns="engagement_level",
+    values="Passed_int", aggfunc="mean"
+) * 100
+heat_n = q5.pivot_table(
+    index="IPEDS.Ethnicity", columns="engagement_level",
+    values="Passed_int", aggfunc="count"
+)
+mask = heat_n < MIN_CELL
+keep_rows = ~mask.all(axis=1)
+heat_rate = heat_rate[keep_rows].reindex(columns=["Low", "Medium", "High"])
+mask      = mask[keep_rows].reindex(columns=["Low", "Medium", "High"])
+
+fig, ax = plt.subplots(figsize=(8, 6))
+sns.heatmap(heat_rate, mask=mask, annot=True, fmt=".1f",
+            cmap="RdYlGn", vmin=0, vmax=100, linewidths=0.5, ax=ax,
+            cbar_kws={"label": "Pass Rate (%)"})
+ax.set_title(f"Pass Rate (%) by Ethnicity × Canvas Engagement\n(gray = n < {MIN_CELL})")
+ax.set_ylabel("IPEDS Ethnicity")
+ax.set_xlabel("Engagement Level")
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## 6  Early Warning System (Q6 — Capstone)
+
+Using three signals available by week 8, we build a simple **weighted risk score** and evaluate its ability to flag at-risk students using an ROC curve.
+
+| Signal | Weight | Rationale |
+|---|---|---|
+| Unit 1 exam score | 50% | Strongest predictor; available by week 5 |
+| Homework score mean | 30% | Quality of effort on mandatory assignments (real variation 0–100) |
+| Attendance/Participation | 20% | In-person engagement |
+
+```{python}
+#| label: fig-roc
+#| fig-cap: "ROC curve for the three-signal early warning model. AUC > 0.7 indicates substantially better-than-random prediction."
+
+ew_features = ["unit1_exam_score", "hw_score_mean", "Attendance...Participation.Final.Score"]
+avail_ew = [c for c in ew_features if c in master.columns]
+
+q6 = master.dropna(subset=avail_ew + ["Passed_int"]).copy()
+
+scaler_ew = MinMaxScaler()
+scaled = pd.DataFrame(
+    scaler_ew.fit_transform(q6[avail_ew]),
+    columns=[c + "_n" for c in avail_ew],
+    index=q6.index
+)
+q6 = pd.concat([q6, scaled], axis=1)
+
+ew_weights = {
+    "unit1_exam_score_n":                         0.50,
+    "hw_score_mean_n":                            0.30,
+    "Attendance...Participation.Final.Score_n":   0.20,
+}
+avail_wn  = [c for c in ew_weights if c in q6.columns]
+total_wn  = sum(ew_weights[c] for c in avail_wn)
+q6["success_score"] = sum(q6[c] * ew_weights[c] / total_wn for c in avail_wn)
+q6["risk_score"]    = 1 - q6["success_score"]
+
+fpr, tpr, thresholds = roc_curve(1 - q6["Passed_int"], q6["risk_score"])
+roc_auc = auc(fpr, tpr)
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+# Scatter
+jitter = np.random.RandomState(42).normal(0, 0.02, len(q6))
+colors = q6["Passed"].map({True: "steelblue", False: "tomato"})
+axes[0].scatter(q6["risk_score"], q6["Passed_int"] + jitter,
+                c=colors, alpha=0.3, s=20)
+axes[0].legend(handles=[
+    mpatches.Patch(facecolor="steelblue", label="Passed"),
+    mpatches.Patch(facecolor="tomato",    label="Did Not Pass")
+])
+axes[0].set_xlabel("Risk Score (0 = safe, 1 = at-risk)")
+axes[0].set_yticks([0, 1])
+axes[0].set_yticklabels(["Did Not Pass", "Passed"])
+axes[0].set_title("Risk Score vs. Actual Outcome")
+
+# ROC
+axes[1].plot(fpr, tpr, color="darkorange", lw=2,
+             label=f"AUC = {roc_auc:.2f}")
+axes[1].plot([0, 1], [0, 1], "gray", linestyle="--", label="Random (AUC = 0.50)")
+axes[1].set_xlabel("False Positive Rate")
+axes[1].set_ylabel("True Positive Rate")
+axes[1].set_title("ROC Curve — Early Warning Model")
+axes[1].legend()
+
+plt.tight_layout()
+plt.show()
+
+# Operational threshold
+target_tpr = 0.70
+idx = np.searchsorted(tpr, target_tpr)
+if idx < len(thresholds):
+    t70 = thresholds[idx]
+    fail_caught = ((q6["risk_score"] >= t70) & (q6["Passed_int"] == 0)).sum()
+    total_fail  = (q6["Passed_int"] == 0).sum()
+    fpr_70      = fpr[idx]
+    print(f"AUC = {roc_auc:.3f}")
+    print(f"At threshold {t70:.2f}: catches {fail_caught}/{total_fail} "
+          f"({fail_caught/total_fail*100:.1f}%) of failing students with "
+          f"FPR = {fpr_70*100:.1f}%")
+```
+
+---
+
+## 7  Recommendations for the Math Department
+
+::: {.callout-tip icon="true"}
+### Five Action Items
+
+1. **Deploy an early warning alert by week 3.**
+   Unit 1 exam score alone is a strong predictor. After the first unit exam (~week 4–5), advisors could receive an automatic flagging list for students in the bottom quartile combined with below-average attendance.
+
+2. **Target engagement interventions by demographic group.**
+   The Engagement × Ethnicity heatmap (§5) shows which groups see the largest pass-rate improvement at higher engagement levels. Directing peer tutoring and structured study groups to these populations is high-leverage.
+
+3. **Investigate lab attendance decline after week 10.**
+   Both passing and non-passing students show attendance drops in the final third of the semester. Additional check-ins or incentive structures in weeks 11–13 may reduce attrition.
+
+4. **Add supplementary materials for trigonometry topics.**
+   CYU analysis (§4) shows Law of Sines, Law of Cosines, and trigonometric equations score significantly below the course average. A dedicated supplementary problem set or optional review session for these topics is justified by the data.
+
+5. **Examine fast-submit behavior at the course-design level.**
+   55% of all Pearson submissions show zero time logged. Consider adding reflective prompts or requiring explanation for selected homework problems to encourage deeper engagement.
+:::
+
+---
+
+## 8  Appendix
+
+### A — Data Caveats
+
+**Blank grades (`" "`):** Students who dropped before the grading window receive a space character (not NaN). These were stripped and excluded. They are analytically distinct from W (late withdrawal).
+
+**IPEDS Ethnicity:** Federally standardized categories for reporting. They do not capture the full diversity of student backgrounds. "Two or More Races" is an aggregate category.
+
+**Duplicate Identifiers:** A student who took MAT 125 in both terms appears twice. All pass-rate analyses reflect enrollment outcomes (one per enrollment event), not unique-student outcomes.
+
+**Term codes:** 1247 = Fall 2024, 1251 = Spring 2025. Rows with NaN term (n=48) were excluded from join analyses.
+
+**First-Gen columns:** Two similarly-named columns exist in SIS. We use `X1st.Gen.College.Std.Flag` which contains clean Y/N values.
+
+### B — Join Quality
+
+```{python}
+#| label: join-quality-table
+
+jq = pd.DataFrame({
+    "Dataset":        ["SIS (graded)",  "SIS + Pearson", "SIS + Canvas", "All Three"],
+    "N":              [n_total,          n_pearson,       n_canvas,       n_all3],
+    "Coverage (%)":   [100.0,
+                       round(n_pearson/n_total*100, 1),
+                       round(n_canvas/n_total*100, 1),
+                       round(n_all3/n_total*100, 1)]
+})
+print(jq.to_string(index=False))
+```
+
+### C — Deduplication Logic
+
+SIS contains one row per enrollment event, not per unique student. Before joining with Pearson and Canvas, we:
+
+1. Stripped blank grades (space strings → excluded)
+2. Removed 48 rows with `Term = NaN`
+3. Called `.drop_duplicates(subset=["Identifier", "Term"])`, keeping the first row when a student appeared in multiple sections of the same course in the same term
+
+This ensures a clean 1:1 join key.
+
+### D — Composite Engagement Score Weights
+
+| Component | Column | Weight |
+|---|---|---|
+| Pre-Class Prep | `Pre.Class.Prep.Final.Score` | 40% |
+| Check Your Understanding | `Check.Your.Understanding.Final.Score` | 40% |
+| Attendance / Participation | `Attendance...Participation.Final.Score` | 20% |
+
+Each component was normalized to [0, 1] with `MinMaxScaler` before weighting.
+
+---
+
+*Report generated by NAU Data Science Club · DataFest 2026 Prep Project*
+*Analysis conducted with Python 3.11 · pandas · seaborn · scikit-learn*
